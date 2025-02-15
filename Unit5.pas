@@ -92,6 +92,8 @@ type
     property ScaleFactor: double read GetScaleFactor;
   end;
 
+  TTool = (ttLine, ttRectangle, ttCircle, ttSelection);
+
   TForm5 = class(TForm)
     Panel1: TPanel;
     btnRectangle: TButton;
@@ -101,6 +103,10 @@ type
     cmbLineWidth: TComboBox;
     PaintBox: TPaintBox;
     ColorBox: TColorBox;
+    btnSave: TButton;
+    btnLoad: TButton;
+    dlgOpen1: TOpenDialog;
+    dlgSave1: TSaveDialog;
     procedure FormCreate(Sender: TObject);
     procedure FormDestroy(Sender: TObject);
     procedure btnLineClick(Sender: TObject);
@@ -116,10 +122,12 @@ type
     procedure PaintBoxMouseWheel(Sender: TObject; Shift: TShiftState; WheelDelta: Integer; MousePos: TPoint; var Handled: Boolean);
     procedure FormMouseWheel(Sender: TObject; Shift: TShiftState;
       WheelDelta: Integer; MousePos: TPoint; var Handled: Boolean);
+    procedure btnSaveClick(Sender: TObject);
+    procedure btnLoadClick(Sender: TObject);
   private
     Shapes: TObjectList<TShape>;
     SelectedShapes: TList<TShape>;
-    CurrentTool: string;
+    CurrentTool: TTool;
     SelectedColor: TColor;
     LineWidth: Integer;
     IsDrawing: Boolean;
@@ -133,8 +141,6 @@ type
     procedure DrawTemporaryShape(CanvasAdapter: TCanvasAdapter);
     procedure MoveSelectedObject(const dx, dy: Single);
     procedure SelectObject(const x, y: Single; AddToSelection: Boolean);
-    function ScreenToWorld(const ScreenPoint: TPoint): T2DPoint;
-    function WorldToScreen(const WorldPoint: T2DPoint): TPoint;
   public
   end;
 
@@ -145,6 +151,8 @@ var
   Form5: TForm5;
 
 implementation
+
+{$R *.dfm}
 
 function Dot(const p1, p2: T2DPoint): double;
 begin
@@ -166,8 +174,6 @@ begin
     result := (v2-x*v1).Length;
   end;
 end;
-
-{$R *.dfm}
 
 { TCanvasAdapter }
 
@@ -332,12 +338,12 @@ function TRectangle.IsPointInside(const x, y, tol: Single): Boolean;
 var
   min_x, max_x, min_y, max_y: Single;
 begin
-  min_x := Min(P1.X, P2.X);
-  max_x := Max(P1.X, P2.X);
-  min_y := Min(P1.Y, P2.Y);
-  max_y := Max(P1.Y, P2.Y);
-  Result := (x >= min_x - LineWidth / 2) and (x <= max_x + LineWidth / 2) and
-            (y >= min_y - LineWidth / 2) and (y <= max_y + LineWidth / 2);
+  min_x := Min(P1.X, P2.X) - LineWidth / 2;
+  max_x := Max(P1.X, P2.X) + LineWidth / 2;
+  min_y := Min(P1.Y, P2.Y) - LineWidth / 2;
+  max_y := Max(P1.Y, P2.Y) + LineWidth / 2;
+  Result := (x >= min_x) and (x <= max_x) and
+            (y >= min_y) and (y <= max_y);
 end;
 
 procedure TRectangle.MoveTo(const dx, dy: Single);
@@ -395,6 +401,12 @@ begin
   ColorBox.Selected := clBlack;
   fCanvas := TCanvasAdapter.Create(PaintBox.Canvas);
   fCanvas.SetBounds(0, 0, PaintBox.Width, PaintBox.Height);
+
+  // Настройка диалогов
+  dlgOpen1.Filter := 'Vector Graphics|*.vgf|All Files|*.*';
+  dlgSave1.Filter := 'Vector Graphics|*.vgf|All Files|*.*';
+  dlgOpen1.DefaultExt := 'vgf';
+  dlgSave1.DefaultExt := 'vgf';
 end;
 
 procedure TForm5.FormDestroy(Sender: TObject);
@@ -403,30 +415,146 @@ begin
   SelectedShapes.Free;
 end;
 
-procedure TForm5.FormMouseWheel(Sender: TObject; Shift: TShiftState;
-  WheelDelta: Integer; MousePos: TPoint; var Handled: Boolean);
+procedure TForm5.btnSaveClick(Sender: TObject);
+var
+  Stream: TFileStream;
+  Writer: TWriter;
+  Shape: TShape;
 begin
-  PaintBoxMouseWheel(Sender, Shift, WheelDelta, PaintBox.ScreenToClient(MousePos), Handled);
+  if dlgSave1.Execute then
+  begin
+    Stream := TFileStream.Create(dlgSave1.FileName, fmCreate);
+    try
+      Writer := TWriter.Create(Stream, 4096);
+      try
+        Writer.WriteListBegin;
+        for Shape in Shapes do
+        begin
+          if Shape is TLine then
+          begin
+            Writer.WriteString('Line');
+            Writer.WriteInteger(Shape.Color);
+            Writer.WriteInteger(Shape.LineWidth);
+            Writer.WriteFloat(TLine(Shape).P1.X);
+            Writer.WriteFloat(TLine(Shape).P1.Y);
+            Writer.WriteFloat(TLine(Shape).P2.X);
+            Writer.WriteFloat(TLine(Shape).P2.Y);
+          end
+          else if Shape is TRectangle then
+          begin
+            Writer.WriteString('Rectangle');
+            Writer.WriteInteger(Shape.Color);
+            Writer.WriteInteger(Shape.LineWidth);
+            Writer.WriteFloat(TRectangle(Shape).P1.X);
+            Writer.WriteFloat(TRectangle(Shape).P1.Y);
+            Writer.WriteFloat(TRectangle(Shape).P2.X);
+            Writer.WriteFloat(TRectangle(Shape).P2.Y);
+          end
+          else if Shape is TCircle then
+          begin
+            Writer.WriteString('Circle');
+            Writer.WriteInteger(Shape.Color);
+            Writer.WriteInteger(Shape.LineWidth);
+            Writer.WriteFloat(TCircle(Shape).Center.X);
+            Writer.WriteFloat(TCircle(Shape).Center.Y);
+            Writer.WriteFloat(TCircle(Shape).Radius);
+          end;
+        end;
+        Writer.WriteListEnd;
+      finally
+        Writer.Free;
+      end;
+    finally
+      Stream.Free;
+    end;
+  end;
+end;
+
+procedure TForm5.btnLoadClick(Sender: TObject);
+var
+  Stream: TFileStream;
+  Reader: TReader;
+  ShapeType: string;
+  Color: TColor;
+  LineWidth: Integer;
+begin
+  if dlgOpen1.Execute then
+  begin
+    Stream := TFileStream.Create(dlgOpen1.FileName, fmOpenRead);
+    try
+      Reader := TReader.Create(Stream, 4096);
+      try
+        Reader.ReadListBegin;
+        Shapes.Clear;
+        SelectedShapes.Clear;
+        while not Reader.EndOfList do
+        begin
+          ShapeType := Reader.ReadString;
+          Color := Reader.ReadInteger;
+          LineWidth := Reader.ReadInteger;
+
+          if ShapeType = 'Line' then
+          begin
+            var Line := TLine.Create;
+            Line.P1.X := Reader.ReadFloat;
+            Line.P1.Y := Reader.ReadFloat;
+            Line.P2.X := Reader.ReadFloat;
+            Line.P2.Y := Reader.ReadFloat;
+            Line.Color := Color;
+            Line.LineWidth := LineWidth;
+            Shapes.Add(Line);
+          end
+          else if ShapeType = 'Rectangle' then
+          begin
+            var Rect := TRectangle.Create;
+            Rect.P1.X := Reader.ReadFloat;
+            Rect.P1.Y := Reader.ReadFloat;
+            Rect.P2.X := Reader.ReadFloat;
+            Rect.P2.Y := Reader.ReadFloat;
+            Rect.Color := Color;
+            Rect.LineWidth := LineWidth;
+            Shapes.Add(Rect);
+          end
+          else if ShapeType = 'Circle' then
+          begin
+            var Circle := TCircle.Create;
+            Circle.Center.X := Reader.ReadFloat;
+            Circle.Center.Y := Reader.ReadFloat;
+            Circle.Radius := Reader.ReadFloat;
+            Circle.Color := Color;
+            Circle.LineWidth := LineWidth;
+            Shapes.Add(Circle);
+          end;
+        end;
+        Reader.ReadListEnd;
+      finally
+        Reader.Free;
+      end;
+    finally
+      Stream.Free;
+    end;
+    PaintBox.Invalidate;
+  end;
 end;
 
 procedure TForm5.btnLineClick(Sender: TObject);
 begin
-  CurrentTool := 'Line';
+  CurrentTool := ttLine;
 end;
 
 procedure TForm5.btnRectangleClick(Sender: TObject);
 begin
-  CurrentTool := 'Rectangle';
+  CurrentTool := ttRectangle;
 end;
 
 procedure TForm5.btnCircleClick(Sender: TObject);
 begin
-  CurrentTool := 'Circle';
+  CurrentTool := ttCircle;
 end;
 
 procedure TForm5.btnSelectionClick(Sender: TObject);
 begin
-  CurrentTool := 'Selection';
+  CurrentTool := ttSelection;
 end;
 
 procedure TForm5.cmbLineWidthChange(Sender: TObject);
@@ -443,7 +571,7 @@ procedure TForm5.PaintBoxMouseDown(Sender: TObject; Button: TMouseButton; Shift:
 begin
   if Button = mbRight then
   begin
-    if CurrentTool = 'Selection' then
+    if CurrentTool = ttSelection then
     begin
       IsPanning := True;
       StartPanPoint := fCanvas.PixelToPoint(TPoint.Create(X, Y));
@@ -454,7 +582,7 @@ begin
     StartPoint := fCanvas.PixelToPoint(TPoint.Create(X, Y));
     IsDrawing := True;
 
-    if CurrentTool = 'Selection' then
+    if CurrentTool = ttSelection then
     begin
       IsSelecting := True;
       SelectObject(StartPoint.X, StartPoint.Y, ssCtrl in Shift);
@@ -468,14 +596,14 @@ var
 begin
   p := fCanvas.PixelToPoint(TPoint.Create(X, Y));
 
-  if IsPanning and (ssRight in Shift) and (CurrentTool = 'Selection') then
+  if IsPanning and (ssRight in Shift) and (CurrentTool = ttSelection) then
   begin
     var dx := -(p.X - StartPanPoint.X);
     var dy := -(p.Y - StartPanPoint.Y);
     fCanvas.SetBounds(fCanvas.xmin+dx, fCanvas.ymin+dy, fCanvas.xmax+dx, fCanvas.ymax+dy);
     PaintBox.Invalidate;
   end
-  else if (CurrentTool = 'Selection') and IsSelecting and (SelectedShapes.Count > 0) then
+  else if (CurrentTool = ttSelection) and IsSelecting and (SelectedShapes.Count > 0) then
   begin
     MoveSelectedObject(p.x - StartPoint.x, p.y - StartPoint.y);
     StartPoint := p;
@@ -499,30 +627,32 @@ begin
     IsDrawing := False;
     IsSelecting := False;
 
-    if CurrentTool <> 'Selection' then
+    if CurrentTool <> ttSelection then
     begin
       EndPoint := fCanvas.PixelToPoint(TPoint.Create(X, Y));
 
-      if CurrentTool = 'Line' then
-      begin
-        Shape := TLine.Create;
-        TLine(Shape).P1 := StartPoint;
-        TLine(Shape).P2 := EndPoint;
-      end
-      else if CurrentTool = 'Rectangle' then
-      begin
-        Shape := TRectangle.Create;
-        TRectangle(Shape).P1 := StartPoint;
-        TRectangle(Shape).P2 := EndPoint;
-      end
-      else if CurrentTool = 'Circle' then
-      begin
-        Shape := TCircle.Create;
-        TCircle(Shape).Center := StartPoint;
-        TCircle(Shape).Radius := Sqrt(Sqr(EndPoint.X - StartPoint.X) + Sqr(EndPoint.Y - StartPoint.Y));
-      end
+      case CurrentTool of
+        ttLine:
+          begin
+            Shape := TLine.Create;
+            TLine(Shape).P1 := StartPoint;
+            TLine(Shape).P2 := EndPoint;
+          end;
+        ttRectangle:
+          begin
+            Shape := TRectangle.Create;
+            TRectangle(Shape).P1 := StartPoint;
+            TRectangle(Shape).P2 := EndPoint;
+          end;
+        ttCircle:
+          begin
+            Shape := TCircle.Create;
+            TCircle(Shape).Center := StartPoint;
+            TCircle(Shape).Radius := Sqrt(Sqr(EndPoint.X - StartPoint.X) + Sqr(EndPoint.Y - StartPoint.Y));
+          end;
       else
         Shape := nil;
+      end;
 
       if Assigned(Shape) then
       begin
@@ -568,26 +698,28 @@ procedure TForm5.DrawTemporaryShape(CanvasAdapter: TCanvasAdapter);
 var
   Shape: TShape;
 begin
-  if CurrentTool = 'Line' then
-  begin
-    Shape := TLine.Create;
-    TLine(Shape).P1 := StartPoint;
-    TLine(Shape).P2 := EndPoint;
-  end
-  else if CurrentTool = 'Rectangle' then
-  begin
-    Shape := TRectangle.Create;
-    TRectangle(Shape).P1 := StartPoint;
-    TRectangle(Shape).P2 := EndPoint;
-  end
-  else if CurrentTool = 'Circle' then
-  begin
-    Shape := TCircle.Create;
-    TCircle(Shape).Center := StartPoint;
-    TCircle(Shape).Radius := Sqrt(Sqr(EndPoint.X - StartPoint.X) + Sqr(EndPoint.Y - StartPoint.Y));
-  end
+  case CurrentTool of
+    ttLine:
+      begin
+        Shape := TLine.Create;
+        TLine(Shape).P1 := StartPoint;
+        TLine(Shape).P2 := EndPoint;
+      end;
+    ttRectangle:
+      begin
+        Shape := TRectangle.Create;
+        TRectangle(Shape).P1 := StartPoint;
+        TRectangle(Shape).P2 := EndPoint;
+      end;
+    ttCircle:
+      begin
+        Shape := TCircle.Create;
+        TCircle(Shape).Center := StartPoint;
+        TCircle(Shape).Radius := Sqrt(Sqr(EndPoint.X - StartPoint.X) + Sqr(EndPoint.Y - StartPoint.Y));
+      end;
   else
     Shape := nil;
+  end;
 
   if Assigned(Shape) then
   begin
@@ -663,16 +795,6 @@ begin
   PaintBox.Invalidate;
 end;
 
-function TForm5.ScreenToWorld(const ScreenPoint: TPoint): T2DPoint;
-begin
-  result := fCanvas.PixelToPoint(ScreenPoint);
-end;
-
-function TForm5.WorldToScreen(const WorldPoint: T2DPoint): TPoint;
-begin
-  result := fCanvas.PointToPixel(WorldPoint);
-end;
-
 procedure TForm5.PaintBoxMouseWheel(Sender: TObject; Shift: TShiftState; WheelDelta: Integer; MousePos: TPoint; var Handled: Boolean);
 begin
   var p := fCanvas.PixelToPoint(MousePos);
@@ -685,6 +807,13 @@ begin
   fCanvas.ymax := p.y+k*(fcanvas.ymax-p.y);
   PaintBox.Invalidate;
   Handled := True;
+end;
+
+procedure TForm5.FormMouseWheel(Sender: TObject; Shift: TShiftState;
+  WheelDelta: Integer; MousePos: TPoint; var Handled: Boolean);
+begin
+  // Вызов обработчика колеса мыши для PaintBox
+  PaintBoxMouseWheel(Sender, Shift, WheelDelta, PaintBox.ScreenToClient(MousePos), Handled);
 end;
 
 { T2DPoint }

@@ -32,6 +32,24 @@ object Form5: TForm5
     Height = 50
     Align = alTop
     TabOrder = 0
+    object btnSave: TButton
+      Left = 729
+      Top = 7
+      Width = 75
+      Height = 25
+      Caption = 'Save'
+      TabOrder = 0
+      OnClick = btnSaveClick
+    end
+    object btnLoad: TButton
+      Left = 810
+      Top = 7
+      Width = 75
+      Height = 25
+      Caption = 'Load'
+      TabOrder = 1
+      OnClick = btnLoadClick
+    end
   end
   object btnRectangle: TButton
     Left = 120
@@ -87,5 +105,13 @@ object Form5: TForm5
     Caption = 'Selection'
     TabOrder = 6
     OnClick = btnSelectionClick
+  end
+  object dlgOpen1: TOpenDialog
+    Left = 944
+    Top = 8
+  end
+  object dlgSave1: TSaveDialog
+    Left = 896
+    Top = 8
   end
 end
